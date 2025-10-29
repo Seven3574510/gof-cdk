@@ -596,16 +596,28 @@ async function saveFailedTask(task: ProcessTask): Promise<void> {
 			// 文件不存在或内容无效，使用空数组
 		}
 
-		// 添加新的失败任务
-		existingTasks.push(task);
-
-		// 保存更新后的任务列表
-		await fs.writeFile(
-			filePath,
-			JSON.stringify(existingTasks, null, 2),
-			"utf8",
+		// 检查是否已存在相同的任务（相同的 fid 和 cdk）
+		const isDuplicate = existingTasks.some(
+			(existingTask) =>
+				existingTask.fid === task.fid && existingTask.cdk === task.cdk,
 		);
-		logger.debug(`失败任务已追加保存到: ${filePath}`);
+
+		// 只有当任务不存在时才添加
+		if (!isDuplicate) {
+			existingTasks.push(task);
+
+			// 保存更新后的任务列表
+			await fs.writeFile(
+				filePath,
+				JSON.stringify(existingTasks, null, 2),
+				"utf8",
+			);
+			logger.debug(`失败任务已追加保存到: ${filePath}`);
+		} else {
+			logger.debug(
+				`任务 [${task.fid}-${task.cdk}] 已存在于失败列表中，跳过重复写入`,
+			);
+		}
 	} catch (error) {
 		logger.error("保存失败任务时出错:", error);
 	}
@@ -616,7 +628,10 @@ async function saveFailedTask(task: ProcessTask): Promise<void> {
  * @param filePath 失败任务文件路径
  * @param successfulTask 成功的任务
  */
-async function removeSuccessfulTask(filePath: string, successfulTask: ProcessTask): Promise<void> {
+async function removeSuccessfulTask(
+	filePath: string,
+	successfulTask: ProcessTask,
+): Promise<void> {
 	try {
 		const { promises: fs } = await import("node:fs");
 
@@ -635,7 +650,8 @@ async function removeSuccessfulTask(filePath: string, successfulTask: ProcessTas
 
 		// 删除成功的任务（匹配 fid 和 cdk）
 		const updatedTasks = existingTasks.filter(
-			task => !(task.fid === successfulTask.fid && task.cdk === successfulTask.cdk)
+			(task) =>
+				!(task.fid === successfulTask.fid && task.cdk === successfulTask.cdk),
 		);
 
 		// 如果任务列表已清空，删除文件；否则保存更新后的任务列表
@@ -648,7 +664,9 @@ async function removeSuccessfulTask(filePath: string, successfulTask: ProcessTas
 				JSON.stringify(updatedTasks, null, 2),
 				"utf8",
 			);
-			logger.debug(`成功任务已从失败列表中删除，剩余失败任务: ${updatedTasks.length} 个`);
+			logger.debug(
+				`成功任务已从失败列表中删除，剩余失败任务: ${updatedTasks.length} 个`,
+			);
 		}
 	} catch (error) {
 		logger.error("删除成功任务时出错:", error);
