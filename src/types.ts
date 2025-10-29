@@ -63,6 +63,8 @@ export interface GiftCodeResult {
 	message: string;
 	cdk: string;
 	fid: string;
+	nickname?: string;
+	kid?: number;
 }
 
 /**

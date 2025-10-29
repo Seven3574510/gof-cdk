@@ -2,9 +2,12 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { processSingleCode, removeSuccessfulTask } from "./api";
 import { loadConfig } from "./config";
-import { useLogger } from "./logger";
+import { colors, useLogger } from "./logger";
 import type { GiftCodeResult, ProcessTask } from "./types";
 import { sleep } from "./utils";
+
+// 禁用 TensorFlow.js 日志
+process.env.TF_CPP_MIN_LOG_LEVEL = "3";
 
 // 创建日志记录器
 const logger = useLogger();
@@ -29,15 +32,17 @@ const processGiftCodes = async (
 	cdks: string[],
 	fids: string[],
 ): Promise<GiftCodeResult[]> => {
-	logger.info(
-		`开始处理礼包码，共 ${cdks.length} 个礼包码，${fids.length} 个玩家ID`,
-	);
-
 	const tasks: ProcessTask[] = fids.flatMap((fid) =>
 		cdks.map((cdk) => ({ fid, cdk })),
 	);
 
-	logger.info(`生成任务列表，共 ${tasks.length} 个任务`);
+	logger.info(
+		`开始处理礼包码,共 ${cdks.length} 个礼包码,${fids.length} 个玩家ID`,
+	);
+	logger.info(`生成任务列表,共 ${tasks.length} 个任务`);
+
+	// 刷新日志缓冲区,确保所有日志都已输出
+	await logger.flush();
 
 	// 结果和统计
 	const results: GiftCodeResult[] = [];
@@ -49,8 +54,12 @@ const processGiftCodes = async (
 	};
 
 	// 串行处理所有任务
-	for (const task of tasks) {
+	for (let i = 0; i < tasks.length; i++) {
+		const task = tasks[i];
 		try {
+			// 显示进度
+			logger.progress(i + 1, tasks.length, "处理进度:");
+
 			// 串行处理单个任务
 			const result = await processSingleCode(task);
 
@@ -74,7 +83,7 @@ const processGiftCodes = async (
 
 			results.push(result);
 
-			// 每个任务之间添加短暂延迟，避免验证码机制触发限制
+			// 每个任务之间添加短暂延迟,避免验证码机制触发限制
 			await sleep(500);
 		} catch (error) {
 			// 单个任务处理失败
@@ -111,7 +120,10 @@ const processFailedTasks = async (
 			return [];
 		}
 
-		logger.info(`开始处理失败任务，共 ${tasks.length} 个任务`);
+		logger.info(`开始处理失败任务,共 ${tasks.length} 个任务`);
+
+		// 刷新日志缓冲区,确保所有日志都已输出
+		await logger.flush();
 
 		// 结果和统计
 		const results: GiftCodeResult[] = [];
@@ -123,8 +135,12 @@ const processFailedTasks = async (
 		};
 
 		// 串行处理所有任务
-		for (const task of tasks) {
+		for (let i = 0; i < tasks.length; i++) {
+			const task = tasks[i];
 			try {
+				// 显示进度
+				logger.progress(i + 1, tasks.length, "重试进度:");
+
 				// 串行处理单个任务
 				const result = await processSingleCode(task);
 
@@ -136,7 +152,7 @@ const processFailedTasks = async (
 						stats.success++;
 					}
 
-					// 任务成功，立即从失败任务文件中删除
+					// 任务成功,立即从失败任务文件中删除
 					await removeSuccessfulTask(filePath, task);
 					logger.debug(`成功任务 [${task.fid}-${task.cdk}] 已从失败列表中删除`);
 				} else {
@@ -152,7 +168,7 @@ const processFailedTasks = async (
 
 				results.push(result);
 
-				// 每个任务之间添加短暂延迟，避免验证码机制触发限制
+				// 每个任务之间添加短暂延迟,避免验证码机制触发限制
 				await sleep(500);
 			} catch (error) {
 				// 单个任务处理失败
@@ -170,12 +186,12 @@ const processFailedTasks = async (
 
 		// 输出最终统计结果
 		logger.info(
-			`所有任务处理完成，总成功: ${stats.success}，已领过: ${stats.alreadyClaimed}，总超时: ${stats.timeout}，总失败: ${stats.failure}`,
+			`\n所有任务处理完成,总成功: ${stats.success},已领过: ${stats.alreadyClaimed},总超时: ${stats.timeout},总失败: ${stats.failure}`,
 		);
 
 		return results;
 	} catch (error) {
-		logger.error("处理失败任务文件时出错:", error);
+		logger.error({ err: error }, "处理失败任务文件时出错");
 		return [];
 	}
 };
@@ -201,44 +217,102 @@ const printTaskSummary = (
 			? (((stats.success + stats.alreadyClaimed) / totalTasks) * 100).toFixed(1)
 			: "0.0";
 
-	// 统计报告头部
-	logger.info("\n" + "=".repeat(70));
-	logger.info("🎆 统计报告 - 任务执行完成");
-	logger.info("=".repeat(70));
+	// 统计数据内容
+	const summaryContent = [
+		`${colors.bright}📊 总体统计${colors.reset}`,
+		"",
+		`  ${colors.cyan}总任务数:${colors.reset} ${colors.bright}${totalTasks}${colors.reset} 个`,
+		`  ${colors.green}✓ 成功领取:${colors.reset} ${colors.green}${stats.success}${colors.reset} 个`,
+		`  ${colors.yellow}↻ 已领过的:${colors.reset} ${colors.yellow}${stats.alreadyClaimed}${colors.reset} 个`,
+		`  ${colors.red}⏱ 超时失败:${colors.reset} ${colors.red}${stats.timeout}${colors.reset} 个`,
+		`  ${colors.red}✗ 其他失败:${colors.reset} ${colors.red}${stats.failure}${colors.reset} 个`,
+		`  ${colors.magenta}📈 成功率:${colors.reset} ${colors.bright}${successRate}%${colors.reset} (含已领取)`,
+	];
 
-	// 总体统计
-	logger.info(`📈 总任务数：${totalTasks} 个`);
-	logger.info(`✅ 成功领取：${stats.success} 个`);
-	logger.info(`🔄 已领过的：${stats.alreadyClaimed} 个`);
-	logger.info(`⏰ 超时失败：${stats.timeout} 个`);
-	logger.info(`❌ 其他失败：${stats.failure} 个`);
-	logger.info(`📊 成功率：${successRate}% (含已领取)`);
+	// 使用边框输出统计报告
+	logger.box("🎆 任务执行统计报告", summaryContent, 70);
 
 	// 成功的任务详情
 	const successTasks = results.filter((r) => r.success);
 	if (successTasks.length > 0) {
-		logger.info("\n✅ 成功的任务:");
-		successTasks.forEach((task) => {
-			logger.info(`  - FID: ${task.fid} | CDK: ${task.cdk} | ${task.message}`);
-		});
+		logger.divider("─", 70);
+		logger.raw(
+			`\n${colors.green}${colors.bright}✅ 成功的任务 (${successTasks.length})${colors.reset}\n\n`,
+		);
+		for (const task of successTasks) {
+			const index = successTasks.indexOf(task);
+			const isNewClaim = !task.message.includes("已领过");
+			const icon = isNewClaim ? "🎁" : "✓";
+			const messageColor = isNewClaim ? colors.green : colors.yellow;
+
+			// 格式: FID:XXX | 游戏名:XXX | 区号:XXX | CDK:XXX
+			const displayParts = [`${colors.cyan}FID:${colors.reset} ${task.fid}`];
+
+			if (task.nickname) {
+				displayParts.push(
+					`${colors.cyan}游戏名:${colors.reset} ${task.nickname}`,
+				);
+			}
+
+			if (task.kid !== undefined) {
+				displayParts.push(`${colors.cyan}区号:${colors.reset} ${task.kid}`);
+			}
+
+			displayParts.push(`${colors.cyan}CDK:${colors.reset} ${task.cdk}`);
+
+			logger.raw(
+				`  ${colors.dim}${index + 1}.${colors.reset} ${icon} ${displayParts.join(` ${colors.dim}|${colors.reset} `)}\n`,
+			);
+			logger.raw(`     ${messageColor}${task.message}${colors.reset}\n`);
+		}
+		logger.raw("\n");
 	}
 
 	// 失败的任务详情
 	const failedTasks = results.filter((r) => !r.success);
 	if (failedTasks.length > 0) {
-		logger.info("\n❌ 失败的任务:");
-		failedTasks.forEach((task) => {
-			logger.info(`  - FID: ${task.fid} | CDK: ${task.cdk} | ${task.message}`);
-		});
-	}
+		logger.divider("─", 70);
+		logger.raw(
+			`\n${colors.red}${colors.bright}❌ 失败的任务 (${failedTasks.length})${colors.reset}\n\n`,
+		);
+		for (const task of failedTasks) {
+			const index = failedTasks.indexOf(task);
+			const isTimeout =
+				task.message.includes("TIMEOUT") || task.message.includes("超时");
+			const icon = isTimeout ? "⏱" : "✗";
 
-	logger.info("=".repeat(70));
-	if (failedTasks.length > 0) {
-		logger.info(
-			"💾 失败的任务已保存到 failed_tasks/ 目录，可使用 --process-failed 参数重试",
+			// 格式: FID:XXX | 游戏名:XXX | 区号:XXX | CDK:XXX
+			const displayParts = [`${colors.cyan}FID:${colors.reset} ${task.fid}`];
+
+			if (task.nickname) {
+				displayParts.push(
+					`${colors.cyan}游戏名:${colors.reset} ${task.nickname}`,
+				);
+			}
+
+			if (task.kid !== undefined) {
+				displayParts.push(`${colors.cyan}区号:${colors.reset} ${task.kid}`);
+			}
+
+			displayParts.push(`${colors.cyan}CDK:${colors.reset} ${task.cdk}`);
+
+			logger.raw(
+				`  ${colors.dim}${index + 1}.${colors.reset} ${icon} ${displayParts.join(` ${colors.dim}|${colors.reset} `)}\n`,
+			);
+			logger.raw(`     ${colors.red}${task.message}${colors.reset}\n`);
+		}
+		logger.raw("\n");
+		logger.divider("─", 70);
+		logger.raw(
+			`\n${colors.yellow}💾 失败的任务已保存到 ${colors.bright}failed_tasks/${colors.reset}${colors.yellow} 目录${colors.reset}\n`,
+		);
+		logger.raw(
+			`${colors.dim}   使用 ${colors.bright}npm run start:failed${colors.reset}${colors.dim} 参数重试失败任务${colors.reset}\n\n`,
 		);
 	}
-	logger.result("🎉 程序执行完成！");
+
+	logger.divider("═", 70);
+	logger.success("\n🎉 程序执行完成！\n");
 };
 
 /**
@@ -306,7 +380,7 @@ async function main(): Promise<void> {
 				};
 				printTaskSummary(failedStats, results);
 			} catch (error) {
-				logger.error("处理失败任务时出错:", error);
+				logger.error({ err: error }, "处理失败任务时出错");
 				process.exit(1);
 			}
 		} else {
@@ -352,7 +426,7 @@ async function main(): Promise<void> {
 
 		process.exit(0);
 	} catch (error) {
-		logger.error("程序运行失败:", error);
+		logger.error({ err: error }, "程序运行失败");
 		process.exit(1);
 	}
 }

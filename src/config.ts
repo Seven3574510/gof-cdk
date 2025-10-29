@@ -49,10 +49,14 @@ class ConfigManager {
 	private static instance: ConfigManager;
 	private cachedConfig: ConfigType | null = null;
 	private configChangeListeners: Array<(config: ConfigType) => void> = [];
+	private initPromise: Promise<void>;
 
 	private constructor() {
+		// 立即打印监控日志(使用 process.stdout 确保立即同步输出)
+		process.stdout.write("开始监控.env文件变更\n");
+
 		// 立即加载一次配置
-		this.loadConfigInternal()
+		this.initPromise = this.loadConfigInternal()
 			.then((config) => {
 				this.cachedConfig = config;
 
@@ -67,6 +71,7 @@ class ConfigManager {
 			})
 			.catch((err) => {
 				console.error("初始配置加载失败:", err);
+				throw err;
 			});
 
 		// 启动配置文件监控
@@ -89,6 +94,9 @@ class ConfigManager {
 	 * @returns {Promise<ConfigType>} 配置对象
 	 */
 	public async loadConfig(): Promise<ConfigType> {
+		// 等待初始化完成
+		await this.initPromise;
+
 		if (this.cachedConfig) {
 			return this.cachedConfig;
 		}
@@ -171,12 +179,6 @@ class ConfigManager {
 	 */
 	private async watchConfigChanges(): Promise<void> {
 		try {
-			if (loggerInitialized) {
-				logger.debug("开始监控.env文件变更");
-			} else {
-				console.log("开始监控.env文件变更");
-			}
-
 			const watcher = watch(".env");
 
 			for await (const event of watcher) {
@@ -197,9 +199,9 @@ class ConfigManager {
 							try {
 								listener(newConfig);
 							} catch (listenerError) {
-								const errMsg = "配置变更监听器执行失败:";
+								const errMsg = "配置变更监听器执行失败";
 								loggerInitialized
-									? logger.error(errMsg, listenerError)
+									? logger.error({ err: listenerError }, errMsg)
 									: console.error(errMsg, listenerError);
 							}
 						}
@@ -209,17 +211,17 @@ class ConfigManager {
 							? logger.info(successMsg)
 							: console.log(successMsg);
 					} catch (reloadError) {
-						const errMsg = "配置重新加载失败:";
+						const errMsg = "配置重新加载失败";
 						loggerInitialized
-							? logger.error(errMsg, reloadError)
+							? logger.error({ err: reloadError }, errMsg)
 							: console.error(errMsg, reloadError);
 					}
 				}
 			}
 		} catch (err) {
-			const errMsg = "配置监控失败:";
+			const errMsg = "配置监控失败";
 			loggerInitialized
-				? logger.error(errMsg, err)
+				? logger.error({ err: err }, errMsg)
 				: console.error(errMsg, err);
 		}
 	}

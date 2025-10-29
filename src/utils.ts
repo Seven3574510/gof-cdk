@@ -39,7 +39,7 @@ export function generateSignedObject(
 
 		return { sign, ...inputObject };
 	} catch (error) {
-		logger.error("生成签名对象时出错:", error);
+		logger.error({ err: error }, "生成签名对象时出错");
 		throw new Error(
 			`生成签名失败: ${error instanceof Error ? error.message : "未知错误"}`,
 		);

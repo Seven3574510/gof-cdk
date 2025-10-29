@@ -1,9 +1,54 @@
+// 在导入任何模块之前设置环境变量,禁用 TensorFlow.js 警告
+process.env.TF_CPP_MIN_LOG_LEVEL = "3";
+
+// 临时屏蔽 TensorFlow.js 的警告信息
+const originalLog = console.log;
+const originalError = console.error;
+const originalWarn = console.warn;
+
+// 过滤函数
+const shouldFilter = (message: string): boolean => {
+	return (
+		message.includes("TensorFlow.js") ||
+		message.includes("tfjs-node") ||
+		message.includes("============================") ||
+		message.includes("Platform node") ||
+		message.includes("Hi there") ||
+		message.includes("Hi, looks like") ||
+		message.includes("@tensorflow") ||
+		message.includes("speed things up dramatically")
+	);
+};
+
+console.log = (...args: unknown[]) => {
+	const message = args.join(" ");
+	if (!shouldFilter(message)) {
+		originalLog.apply(console, args);
+	}
+};
+
+console.error = (...args: unknown[]) => {
+	const message = args.join(" ");
+	if (!shouldFilter(message)) {
+		originalError.apply(console, args);
+	}
+};
+
+console.warn = (...args: unknown[]) => {
+	const message = args.join(" ");
+	if (!shouldFilter(message)) {
+		originalWarn.apply(console, args);
+	}
+};
+
 import axios, {
 	type AxiosRequestConfig,
 	type AxiosResponse,
 	type AxiosInstance,
 } from "axios";
 import { DdddOcr } from "ddddocr-node";
+
+// 不恢复原始的 console，保持过滤直到程序结束
 import {
 	addConfigChangeListener,
 	loadConfig,
@@ -64,7 +109,7 @@ class ApiService {
 			);
 			logger.debug(`API服务使用基础URL: ${this.apiBaseUrl}`);
 		} catch (error) {
-			logger.error("初始化API服务失败:", error);
+			logger.error({ err: error }, "初始化API服务失败");
 			// 使用默认参数
 			this.createAxiosInstance();
 		}
@@ -120,7 +165,7 @@ class ApiService {
 				return config;
 			},
 			(error) => {
-				logger.error("请求拦截器错误:", error);
+				logger.debug({ err: error }, "请求拦截器错误");
 				return Promise.reject(error);
 			},
 		);
@@ -135,11 +180,8 @@ class ApiService {
 			},
 			(error) => {
 				if (axios.isAxiosError(error)) {
-					logger.error(
-						`请求失败 ${error.config?.url}:`,
-						error.code,
-						error.message,
-						error.response?.status,
+					logger.debug(
+						`请求失败 ${error.config?.url}: ${error.code} ${error.message} ${error.response?.status}`,
 					);
 
 					// 处理429（请求过多）错误
@@ -204,13 +246,13 @@ class ApiService {
 						await sleep(delay);
 					}
 				} else {
-					logger.error("非Axios错误，直接抛出:", error);
+					logger.debug({ err: error }, "非Axios错误，直接抛出");
 					throw error;
 				}
 			}
 		}
 
-		logger.error(`请求 ${config.url} 重试${maxAttempts}次后仍然失败`);
+		logger.debug(`请求 ${config.url} 重试${maxAttempts}次后仍然失败`);
 		throw new Error(`请求重试${maxAttempts}次后仍然失败`);
 	}
 
@@ -236,7 +278,7 @@ class ApiService {
 
 			return response.data.code === 0 ? response.data.data : null;
 		} catch (error) {
-			logger.error("获取玩家信息失败:", error);
+			logger.debug({ err: error }, "获取玩家信息失败");
 			return null;
 		}
 	}
@@ -264,11 +306,11 @@ class ApiService {
 
 			const captcha = await ocr.classification(response.data.data?.img ?? "");
 
-			logger.info(`验证码: ${captcha}`);
+			logger.debug(`验证码: ${captcha}`);
 
 			return captcha;
 		} catch (error) {
-			logger.error("获取验证码失败:", error);
+			logger.debug({ err: error }, "获取验证码失败");
 			return "";
 		}
 	}
@@ -379,7 +421,10 @@ class ApiService {
 						fid,
 					};
 				} catch (retryError) {
-					logger.error(`礼包码重试请求失败 ${cdk} 对玩家 ${fid}:`, retryError);
+					logger.debug(
+						{ err: retryError },
+						`礼包码重试请求失败 ${cdk} 对玩家 ${fid}`,
+					);
 					return {
 						success: false,
 						message: "重试后仍然失败",
@@ -388,7 +433,7 @@ class ApiService {
 					};
 				}
 			} else {
-				logger.error(`礼包码请求失败 ${cdk} 对玩家 ${fid}:`, error);
+				logger.debug({ err: error }, `礼包码请求失败 ${cdk} 对玩家 ${fid}`);
 				return {
 					success: false,
 					message: error instanceof Error ? error.message : "未知错误",
@@ -420,11 +465,8 @@ export const processSingleCode = async (
 	task: ProcessTask,
 ): Promise<GiftCodeResult> => {
 	try {
-		logger.debug(`开始处理玩家 ${task.fid} 的礼包码 ${task.cdk}`);
-
 		const playerInfo = await apiService.getPlayerInfo(task.fid);
 		if (!playerInfo) {
-			logger.error(`无法获取玩家 ${task.fid} 的信息`);
 			return {
 				success: false,
 				message: "无法获取玩家信息",
@@ -432,10 +474,6 @@ export const processSingleCode = async (
 				fid: task.fid,
 			};
 		}
-
-		logger.debug(
-			`成功获取玩家信息: ${playerInfo.nickname} (ID: ${playerInfo.kid})`,
-		);
 
 		// 最大重试次数
 		const maxRetries = 3;
@@ -448,27 +486,23 @@ export const processSingleCode = async (
 				// 获取验证码
 				const captcha_code = await apiService.getCaptcha(task.fid);
 
-				// 验证码格式检查：长度必须为4且不包含中文
+				// 验证码格式检查:长度必须为4且不包含中文
 				const hasChinese = /[\u4e00-\u9fa5]/.test(captcha_code);
 				if (captcha_code.length !== 4 || hasChinese) {
-					// 验证码格式错误，进行重试
+					// 验证码格式错误,进行重试
 					currentRetry++;
-					const retryMessage = `[${playerInfo.kid}] - [${playerInfo.nickname}] 识别验证码失败，正在进行重试...(${currentRetry}/${maxRetries})`;
-					logger.error(retryMessage);
 
 					if (currentRetry >= maxRetries) {
-						// 达到最大重试次数，跳过当前任务
-						const skipMessage = `[${playerInfo.kid}] - [${playerInfo.nickname}] 识别验证码失败，已达到最大重试次数(${maxRetries})，跳过当前id&cdk，执行下一个...`;
-						logger.error(skipMessage);
-
-						// 保存失败记录到本地
+						// 达到最大重试次数,跳过当前任务
 						await saveFailedTask(task);
 
 						return {
 							success: false,
-							message: `[${playerInfo.kid}] - [${playerInfo.nickname}] 识别验证码失败，已达到最大重试次数(${maxRetries})，已保存失败记录`,
+							message: `识别验证码失败,已达到最大重试次数(${maxRetries})`,
 							cdk: task.cdk,
 							fid: task.fid,
+							nickname: playerInfo.nickname,
+							kid: playerInfo.kid,
 						};
 					}
 
@@ -484,57 +518,52 @@ export const processSingleCode = async (
 					captcha_code,
 				);
 
-				// 如果成功，直接返回结果
+				// 如果成功,直接返回结果
 				if (result.success) {
-					const message = `[${playerInfo.kid}] - [${playerInfo.nickname}] 领取 ${task.cdk} 成功: ${result.message}`;
-					logger.result(message);
-					return { ...result, message };
+					return {
+						...result,
+						message: result.message,
+						nickname: playerInfo.nickname,
+						kid: playerInfo.kid,
+					};
 				}
 
-				// 如果失败，进行重试
+				// 如果失败,进行重试
 				currentRetry++;
-				const retryMessage = `[${playerInfo.kid}] - [${playerInfo.nickname}] 领取 ${task.cdk} 失败: ${result.message}，正在进行重试...(${currentRetry}/${maxRetries})`;
-				logger.error(retryMessage);
 
 				if (currentRetry >= maxRetries) {
-					// 达到最大重试次数，跳过当前任务
-					const skipMessage = `[${playerInfo.kid}] - [${playerInfo.nickname}] 领取 ${task.cdk} 失败: ${result.message}，已达到最大重试次数(${maxRetries})，跳过当前id&cdk，执行下一个...`;
-					logger.error(skipMessage);
-
-					// 保存失败记录到本地
+					// 达到最大重试次数,跳过当前任务
 					await saveFailedTask(task);
 
 					return {
 						success: false,
-						message: `${result.message}，已达到最大重试次数(${maxRetries})，已保存失败记录`,
+						message: `${result.message},已达到最大重试次数(${maxRetries})`,
 						cdk: task.cdk,
 						fid: task.fid,
+						nickname: playerInfo.nickname,
+						kid: playerInfo.kid,
 					};
 				}
 
 				// 等待一段时间再重试
 				await sleep(1000);
 			} catch (error) {
-				// 处理过程中出错，进行重试
+				// 处理过程中出错,进行重试
 				currentRetry++;
 				const errorMessage =
 					error instanceof Error ? error.message : "未知错误";
-				const retryMessage = `[${playerInfo.kid}] - [${playerInfo.nickname}] 处理出错(${errorMessage})，正在进行重试...(${currentRetry}/${maxRetries})`;
-				logger.error(retryMessage);
 
 				if (currentRetry >= maxRetries) {
-					// 达到最大重试次数，跳过当前任务
-					const skipMessage = `[${playerInfo.kid}] - [${playerInfo.nickname}] 处理出错(${errorMessage})，已达到最大重试次数(${maxRetries})，跳过当前id&cdk，执行下一个...`;
-					logger.error(skipMessage);
-
-					// 保存失败记录到本地
+					// 达到最大重试次数,跳过当前任务
 					await saveFailedTask(task);
 
 					return {
 						success: false,
-						message: `[${playerInfo.kid}] - [${playerInfo.nickname}] 处理出错(${errorMessage})，已达到最大重试次数(${maxRetries})，已保存失败记录`,
+						message: `处理出错(${errorMessage}),已达到最大重试次数(${maxRetries})`,
 						cdk: task.cdk,
 						fid: task.fid,
+						nickname: playerInfo.nickname,
+						kid: playerInfo.kid,
 					};
 				}
 
@@ -552,7 +581,7 @@ export const processSingleCode = async (
 			}
 		);
 	} catch (error) {
-		logger.error("处理礼包码时发生未捕获的错误:", error);
+		logger.error({ err: error }, "处理礼包码时发生未捕获的错误");
 		return {
 			success: false,
 			message: error instanceof Error ? error.message : "未知错误",
@@ -619,7 +648,7 @@ async function saveFailedTask(task: ProcessTask): Promise<void> {
 			);
 		}
 	} catch (error) {
-		logger.error("保存失败任务时出错:", error);
+		logger.debug({ err: error }, "保存失败任务时出错");
 	}
 }
 
@@ -669,7 +698,7 @@ async function removeSuccessfulTask(
 			);
 		}
 	} catch (error) {
-		logger.error("删除成功任务时出错:", error);
+		logger.debug({ err: error }, "删除成功任务时出错");
 	}
 }
 
